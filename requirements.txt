@@ -1,0 +1,7 @@
+tkinter
+ttkthemes
+yfinance
+requests
+pandas
+matplotlib
+sqlite3
