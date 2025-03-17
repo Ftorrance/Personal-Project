@@ -5,13 +5,20 @@ from database import add_stock, view_portfolio, calculate_portfolio_value
 import matplotlib.pyplot as plt
 import matplotlib.pyplot as plt
 from data_fetch import get_historical_data, get_stock_price  # ✅ Import real-time price function
-
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import pandas as pd
+from data_fetch import get_historical_data
+from database import add_stock, view_portfolio, calculate_portfolio_value
 import time
+import sqlite3  # ✅ Import SQLite to fetch portfolio data
+import matplotlib.pyplot
+from tkinter import simpledialog
 
 # Create the main application window
 root = tk.Tk()
 root.title("Stock Portfolio Manager")
-root.geometry("500x500")
+root.geometry("900x700")
 root.configure(bg="white")  # Clean all-white background
 
 # Apply a neutral theme
@@ -57,13 +64,101 @@ def add_stock_gui():
         return
 
     shares = int(shares)
-    price = float(price) if price else None
+    price = float(price) if price else 0  # Default to 0 if no price is entered
 
     add_stock(ticker, shares, price)
     messagebox.showinfo("Success", f"Added {shares} shares of {ticker}.")
     ticker_entry.delete(0, tk.END)
     shares_entry.delete(0, tk.END)
     price_entry.delete(0, tk.END)
+
+    update_portfolio_table()  # ✅ Refresh portfolio table
+    update_graph()  # ✅ Refresh stock performance graph
+    update_portfolio_performance()  # ✅ Refresh portfolio value graph
+
+def update_portfolio_table():
+    """Fetch portfolio data, combine duplicate stocks, and update the table."""
+    conn = sqlite3.connect("portfolio.db")
+    cursor = conn.cursor()
+
+    # Fetch all stocks from the database
+    cursor.execute("SELECT ticker, shares, purchase_price FROM portfolio")
+    portfolio = cursor.fetchall()
+    conn.close()
+
+    if not portfolio:
+        return  # No data, nothing to display
+
+    # Dictionary to store consolidated stock data
+    stock_summary = {}
+
+    for ticker, shares, price in portfolio:
+        if price is None:
+            price = 0  # Handle missing prices
+
+        if ticker in stock_summary:
+            # Update total shares & recalculate average price
+            total_shares = stock_summary[ticker]["shares"] + shares
+            avg_price = ((stock_summary[ticker]["shares"] * stock_summary[ticker]["avg_price"]) + (shares * price)) / total_shares
+            stock_summary[ticker]["shares"] = total_shares
+            stock_summary[ticker]["avg_price"] = avg_price
+        else:
+            stock_summary[ticker] = {"shares": shares, "avg_price": price}
+
+    # Clear existing table data
+    portfolio_tree.delete(*portfolio_tree.get_children())
+
+    # Update table with condensed data
+    for ticker, data in stock_summary.items():
+        total_value = data["shares"] * get_stock_price(ticker)  # Get real-time stock price
+        portfolio_tree.insert("", "end", values=(ticker, data["shares"], f"${data['avg_price']:.2f}", f"${total_value:.2f}"))
+    # Calculate total portfolio value
+    total_portfolio_value = sum(data["shares"] * get_stock_price(ticker) for ticker, data in stock_summary.items())
+
+    # Update the displayed portfolio value
+    portfolio_value_label.config(text=f"Total Portfolio Value: ${total_portfolio_value:.2f}")
+
+def remove_stock():
+    """Allow the user to remove a specific number of shares instead of deleting the entire stock entry."""
+    selected_item = portfolio_tree.selection()  # Get selected row
+    if not selected_item:
+        messagebox.showerror("Error", "Please select a stock to remove shares from.")
+        return
+
+    # Get stock details from the selected row
+    item_values = portfolio_tree.item(selected_item, "values")
+    ticker_to_remove = item_values[0]
+    current_shares = int(item_values[1])
+
+    # Ask the user how many shares they want to remove
+    shares_to_remove = simpledialog.askinteger("Remove Shares", f"How many shares of {ticker_to_remove} do you want to remove?", minvalue=1, maxvalue=current_shares)
+    
+    if shares_to_remove is None:  # User canceled the input
+        return
+
+    if shares_to_remove > current_shares:
+        messagebox.showerror("Error", "You cannot remove more shares than you own.")
+        return
+
+    conn = sqlite3.connect("portfolio.db")
+    cursor = conn.cursor()
+
+    if shares_to_remove == current_shares:
+        # Remove the entire stock entry if all shares are being removed
+        cursor.execute("DELETE FROM portfolio WHERE ticker = ?", (ticker_to_remove,))
+    else:
+        # Update the stock entry with the new number of shares
+        cursor.execute("UPDATE portfolio SET shares = shares - ? WHERE ticker = ?", (shares_to_remove, ticker_to_remove))
+
+    conn.commit()
+    conn.close()
+
+    # Refresh the portfolio table and total value
+    update_portfolio_table()
+    update_graph()
+    update_portfolio_performance()
+
+    messagebox.showinfo("Success", f"Removed {shares_to_remove} shares of {ticker_to_remove}.")
 
 # Function to display portfolio
 def view_portfolio_gui():
@@ -136,19 +231,164 @@ def refresh_stock_prices():
     # Automatically refresh every 10 seconds
     root.after(10000, refresh_stock_prices)  # 10,000 ms = 10 sec
 
+def update_portfolio_performance():
+    """Calculate total portfolio value over time and update the portfolio performance graph."""
+    conn = sqlite3.connect("portfolio.db")
+    cursor = conn.cursor()
+
+    # Fetch all stock purchases
+    cursor.execute("SELECT ticker, shares, purchase_price FROM portfolio")
+    portfolio = cursor.fetchall()
+    conn.close()
+
+    if not portfolio:
+        return  # No data, nothing to plot
+
+    total_invested = sum(shares * price for _, shares, price in portfolio if price is not None)  # Total money invested
+
+    # Fetch historical data for each stock and calculate total value over time
+    total_value_over_time = pd.Series(dtype=float)  # ✅ Ensure this is a Pandas Series
+
+    for ticker, shares, _ in portfolio:
+        data = get_historical_data(ticker, period="6mo")
+        if data is not None and not data.empty:
+            if total_value_over_time.empty:  # ✅ Fix: Properly initialize if it's empty
+                total_value_over_time = data["Close"] * shares
+            else:
+                total_value_over_time = total_value_over_time.add(data["Close"] * shares, fill_value=0)
+
+    # Clear existing graph
+    ax_portfolio.clear()
+    ax_portfolio.set_title("Total Portfolio Performance")
+    ax_portfolio.set_xlabel("Date")
+    ax_portfolio.set_ylabel("Total Value ($)")
+
+    # Plot total portfolio value
+    ax_portfolio.plot(total_value_over_time.index, total_value_over_time, label="Portfolio Value", color="blue")
+
+    # Plot total amount invested as a dotted line
+    ax_portfolio.axhline(y=total_invested, color="red", linestyle="dotted", label="Total Invested")
+
+    ax_portfolio.legend()
+    canvas_portfolio.draw()
+
+    # Clear existing graph
+    ax_portfolio.clear()
+    ax_portfolio.set_title("Total Portfolio Performance")
+    ax_portfolio.set_xlabel("Date")
+    ax_portfolio.set_ylabel("Total Value ($)")
+
+    # Plot total portfolio value
+    ax_portfolio.plot(total_value_over_time.index, total_value_over_time, label="Portfolio Value", color="blue")
+
+    # Plot total amount invested as a dotted line
+    ax_portfolio.axhline(y=total_invested, color="red", linestyle="dotted", label="Total Invested")
+
+    ax_portfolio.legend()
+    canvas_portfolio.draw()
+
+
+
+
+
+def update_graph():
+    """Fetch portfolio data and update the stock performance graph with a single line per stock."""
+    conn = sqlite3.connect("portfolio.db")
+    cursor = conn.cursor()
+
+    # Fetch all unique stock tickers from the database
+    cursor.execute("SELECT DISTINCT ticker FROM portfolio")
+    tickers = [row[0] for row in cursor.fetchall()]
+    conn.close()
+
+    # Clear the existing graph
+    ax.clear()
+    ax.set_title("Stock Performance (Last 6 Months)")
+    ax.set_xlabel("Date")
+    ax.set_ylabel("Stock Price ($)")
+
+    # Fetch and plot stock performance for each unique ticker
+    for ticker in tickers:
+        data = get_historical_data(ticker, period="6mo")
+        if data is not None and not data.empty:
+            ax.plot(data.index, data["Close"], label=ticker)  # ✅ One line per ticker
+
+    ax.legend()
+    canvas.draw()
+
+
 # Create a frame for buttons
 btn_frame = ttk.Frame(root, padding=20)
 btn_frame.pack(pady=10, padx=20, fill="both")
 
+# Frame for portfolio display and graph
+portfolio_frame = ttk.Frame(root, padding=10)
+portfolio_frame.pack(pady=10, padx=10, fill="both", expand=True)
+
+
+# Create a Frame for Graphs to Place Them Side by Side
+graphs_frame = ttk.Frame(root, padding=10)
+graphs_frame.pack(pady=10, padx=10, fill="both", expand=True)
+
+# Stock Performance Graph (Left)
+graph_frame = ttk.Frame(graphs_frame, padding=10)
+graph_frame.grid(row=0, column=0, sticky="nsew")
+
+# Portfolio Performance Graph (Right)
+portfolio_graph_frame = ttk.Frame(graphs_frame, padding=10)
+portfolio_graph_frame.grid(row=0, column=1, sticky="nsew")
+
+
+# Create Matplotlib Figure for Stock Performance Graph
+fig, ax = plt.subplots(figsize=(5, 3))  # Adjust width
+canvas = FigureCanvasTkAgg(fig, master=graph_frame)
+canvas.get_tk_widget().pack(fill="both", expand=True)
+
+# Create Matplotlib Figure for Portfolio Performance Graph
+fig_portfolio, ax_portfolio = plt.subplots(figsize=(5, 3))  # Adjust width
+canvas_portfolio = FigureCanvasTkAgg(fig_portfolio, master=portfolio_graph_frame)
+canvas_portfolio.get_tk_widget().pack(fill="both", expand=True)
+
+# Allow Both Graphs to Expand Evenly
+graphs_frame.columnconfigure(0, weight=1)
+graphs_frame.columnconfigure(1, weight=1)
+
+
+# Portfolio Frame (Table)
+portfolio_frame = ttk.Frame(root, padding=10)
+portfolio_frame.pack(pady=10, padx=10, fill="both", expand=True)
+# Portfolio Table
+portfolio_tree = ttk.Treeview(portfolio_frame, columns=("Ticker", "Total Shares", "Avg Price ($)", "Total Value ($)"), show="headings")
+
+portfolio_tree.heading("Ticker", text="Ticker")
+portfolio_tree.heading("Total Shares", text="Total Shares")
+portfolio_tree.heading("Avg Price ($)", text="Avg Price ($)")
+portfolio_tree.heading("Total Value ($)", text="Total Value ($)")
+
+portfolio_tree.pack(fill="both", expand=True)
+
+# Portfolio Value Frame
+portfolio_value_frame = ttk.Frame(root, padding=10)
+portfolio_value_frame.pack(pady=10, padx=10, fill="both", expand=True)
+
+# Label to Display Total Portfolio Value
+portfolio_value_label = ttk.Label(portfolio_value_frame, text="Total Portfolio Value: $0.00", font=("Arial", 14, "bold"))
+portfolio_value_label.pack()
+
+
 # Styled buttons with light gray background
 ttk.Button(btn_frame, text="Add Stock", command=add_stock_gui, style="TButton").pack(pady=5)
 ttk.Button(btn_frame, text="View Portfolio", command=view_portfolio_gui, style="TButton").pack(pady=5)
-ttk.Button(btn_frame, text="Calculate Portfolio Value", command=calculate_portfolio_value_gui, style="TButton").pack(pady=5)
 ttk.Button(btn_frame, text="Show Stock Graph", command=plot_stock_performance, style="TButton").pack(pady=5)
 ttk.Button(btn_frame, text="Refresh Prices", command=refresh_stock_prices, style="TButton").pack(pady=5)
 ttk.Button(btn_frame, text="Exit", command=root.quit, style="TButton").pack(pady=5)
+# Button to Remove Selected Stock
+ttk.Button(btn_frame, text="Remove Shares", command=remove_stock, style="TButton").pack(pady=5)
 
 # Run the application
+update_portfolio_table()  # ✅ Load portfolio data when GUI starts
+update_graph()  # ✅ Load stock performance graph on startup
+update_portfolio_performance()  # ✅ Load total portfolio performance graph on startup
 root.mainloop()
 
 
