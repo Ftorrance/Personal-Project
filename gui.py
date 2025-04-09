@@ -16,10 +16,40 @@ import matplotlib.pyplot
 from tkinter import simpledialog
 
 # Create the main application window
-root = tk.Tk()
-root.title("Stock Portfolio Manager")
-root.geometry("900x700")
-root.configure(bg="white")  # Clean all-white background
+import tkinter as tk
+from tkinter import ttk
+
+base_root = tk.Tk()  # this is the actual window
+base_root.title("Stock Portfolio Manager")
+base_root.geometry("1000x800")  # Optional: make it taller for scroll space
+
+main_canvas = tk.Canvas(base_root)
+main_scrollbar = ttk.Scrollbar(base_root, orient="vertical", command=main_canvas.yview)
+base_root.configure(bg="white")  # Clean all-white background
+scrollable_frame = ttk.Frame(main_canvas)
+
+scrollable_frame.bind(
+    "<Configure>",
+    lambda e: main_canvas.configure(
+        scrollregion=main_canvas.bbox("all")
+    )
+)
+
+main_canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+main_canvas.configure(yscrollcommand=main_scrollbar.set)
+
+main_canvas.pack(side="left", fill="both", expand=True)
+main_scrollbar.pack(side="right", fill="y")
+
+# ✅ Redirect root so you don’t have to rewrite the rest of your layout
+root = scrollable_frame
+
+
+
+def _on_mousewheel(event):
+    main_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+main_canvas.bind_all("<MouseWheel>", _on_mousewheel)
 
 # Apply a neutral theme
 style = ThemedStyle(root)
@@ -75,6 +105,8 @@ def add_stock_gui():
     update_portfolio_table()  # ✅ Refresh portfolio table
     update_graph()  # ✅ Refresh stock performance graph
     update_portfolio_performance()  # ✅ Refresh portfolio value graph
+    update_market_comparison()  # ✅ Refresh comparison graph
+
 
 def update_portfolio_table():
     """Fetch portfolio data, combine duplicate stocks, and update the table."""
@@ -157,6 +189,7 @@ def remove_stock():
     update_portfolio_table()
     update_graph()
     update_portfolio_performance()
+    update_market_comparison()  # ✅ Refresh comparison graph
 
     messagebox.showinfo("Success", f"Removed {shares_to_remove} shares of {ticker_to_remove}.")
 
@@ -316,6 +349,58 @@ def update_graph():
     ax.legend()
     canvas.draw()
 
+def update_market_comparison():
+    """Compare portfolio performance to market indices."""
+    indices = {
+        "^GSPC": "S&P 500",
+        "^IXIC": "NASDAQ",
+        "^DJI": "Dow Jones"
+    }
+
+    # Get portfolio historical value
+    conn = sqlite3.connect("portfolio.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT ticker, shares FROM portfolio")
+    portfolio = cursor.fetchall()
+    conn.close()
+
+    portfolio_value = pd.Series(dtype=float)
+
+    for ticker, shares in portfolio:
+        data = get_historical_data(ticker, period="6mo")
+        if data is not None and not data.empty:
+            value = data["Close"] * shares
+            portfolio_value = portfolio_value.add(value, fill_value=0) if not portfolio_value.empty else value
+
+    # Normalize portfolio value to start at 100
+    normalized_portfolio = (portfolio_value / portfolio_value.iloc[0]) * 100
+
+    # Start the graph
+    ax_compare.clear()
+    ax_compare.set_title("Portfolio vs Market Indices (Normalized)")
+    ax_compare.set_xlabel("Date")
+    ax_compare.set_ylabel("Performance (Indexed to 100)")
+
+    ax_compare.plot(normalized_portfolio.index, normalized_portfolio, label="Portfolio", linewidth=2)
+
+    # Plot each index
+    for symbol, label in indices.items():
+        data = get_historical_data(symbol, period="6mo")
+        if data is not None and not data.empty:
+            norm_index = (data["Close"] / data["Close"].iloc[0]) * 100
+            ax_compare.plot(data.index, norm_index, label=label, linestyle="--")
+
+    ax_compare.legend()
+    canvas_compare.draw()
+    
+# Market Comparison Graph Frame
+comparison_graph_frame = ttk.Frame(root, padding=10)
+comparison_graph_frame.pack(pady=10, padx=10, fill="both", expand=True)
+
+# Create Matplotlib Figure for Market Comparison
+fig_compare, ax_compare = plt.subplots(figsize=(10, 4))
+canvas_compare = FigureCanvasTkAgg(fig_compare, master=comparison_graph_frame)
+canvas_compare.get_tk_widget().pack(fill="both", expand=True)
 
 # Create a frame for buttons
 btn_frame = ttk.Frame(root, padding=20)
@@ -389,6 +474,9 @@ ttk.Button(btn_frame, text="Remove Shares", command=remove_stock, style="TButton
 update_portfolio_table()  # ✅ Load portfolio data when GUI starts
 update_graph()  # ✅ Load stock performance graph on startup
 update_portfolio_performance()  # ✅ Load total portfolio performance graph on startup
-root.mainloop()
+update_market_comparison()  # ✅ Load comparison graph on startup
+
+base_root.mainloop()
+
 
 
