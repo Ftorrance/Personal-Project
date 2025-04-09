@@ -5,7 +5,7 @@ This is a **Python-based stock portfolio tracker** that allows users to:
 ✅ Fetch **real-time stock prices**  
 ✅ View **interactive graphs**  
 ✅ Auto-refresh prices **every 10 seconds**  
-
+✅Scrollable interface **can scroll the whole application**
 ## 🚀 Features
 - **Track stock performance** in a modern UI  
 - **Search for stocks dynamically**  
