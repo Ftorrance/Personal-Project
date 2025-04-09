@@ -14,6 +14,56 @@ import time
 import sqlite3  # ✅ Import SQLite to fetch portfolio data
 import matplotlib.pyplot
 from tkinter import simpledialog
+import numpy as np
+
+def update_risk_metrics():
+    """Calculate Sharpe Ratio, Volatility, and Beta for the portfolio."""
+    conn = sqlite3.connect("portfolio.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT ticker, shares FROM portfolio")
+    portfolio = cursor.fetchall()
+    conn.close()
+
+    if not portfolio:
+        risk_metrics_output.config(text="No portfolio data.")
+        return
+
+    portfolio_returns = pd.DataFrame()
+    for ticker, shares in portfolio:
+        data = get_historical_data(ticker, period="6mo")
+        if data is not None and not data.empty:
+            daily_returns = data["Close"].pct_change().dropna()
+            weighted_returns = daily_returns * shares
+            portfolio_returns[ticker] = weighted_returns
+
+    # Combine into total portfolio returns
+    portfolio_returns["Portfolio"] = portfolio_returns.sum(axis=1)
+
+    # Fetch benchmark returns (S&P 500)
+    sp500 = get_historical_data("^GSPC", period="6mo")
+    if sp500 is None or sp500.empty:
+        risk_metrics_output.config(text="Unable to fetch S&P 500 data.")
+        return
+
+    benchmark_returns = sp500["Close"].pct_change().dropna()
+    aligned = pd.concat([portfolio_returns["Portfolio"], benchmark_returns], axis=1).dropna()
+    aligned.columns = ["Portfolio", "SP500"]
+
+    # Risk Metrics
+    volatility = np.std(aligned["Portfolio"]) * np.sqrt(252)
+    sharpe_ratio = (aligned["Portfolio"].mean() - 0.01/252) / aligned["Portfolio"].std() * np.sqrt(252)
+
+    covariance = np.cov(aligned["Portfolio"], aligned["SP500"])[0][1]
+    benchmark_variance = np.var(aligned["SP500"])
+    beta = covariance / benchmark_variance if benchmark_variance != 0 else np.nan
+
+    risk_text = (
+        f"📊 Volatility (Annualized): {volatility:.4f}\n"
+        f"📈 Sharpe Ratio: {sharpe_ratio:.4f}\n"
+        f"📉 Beta vs S&P 500: {beta:.4f}"
+    )
+
+    risk_metrics_output.config(text=risk_text)
 
 # Create the main application window
 import tkinter as tk
@@ -106,6 +156,7 @@ def add_stock_gui():
     update_graph()  # ✅ Refresh stock performance graph
     update_portfolio_performance()  # ✅ Refresh portfolio value graph
     update_market_comparison()  # ✅ Refresh comparison graph
+    update_risk_metrics()
 
 
 def update_portfolio_table():
@@ -190,6 +241,7 @@ def remove_stock():
     update_graph()
     update_portfolio_performance()
     update_market_comparison()  # ✅ Refresh comparison graph
+    update_risk_metrics()
 
     messagebox.showinfo("Success", f"Removed {shares_to_remove} shares of {ticker_to_remove}.")
 
@@ -392,7 +444,57 @@ def update_market_comparison():
 
     ax_compare.legend()
     canvas_compare.draw()
-    
+    import numpy as np
+
+def update_risk_metrics():
+    """Calculate Sharpe Ratio, Volatility, and Beta for the portfolio."""
+    conn = sqlite3.connect("portfolio.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT ticker, shares FROM portfolio")
+    portfolio = cursor.fetchall()
+    conn.close()
+
+    if not portfolio:
+        risk_metrics_output.config(text="No portfolio data.")
+        return
+
+    portfolio_returns = pd.DataFrame()
+    for ticker, shares in portfolio:
+        data = get_historical_data(ticker, period="6mo")
+        if data is not None and not data.empty:
+            daily_returns = data["Close"].pct_change().dropna()
+            weighted_returns = daily_returns * shares
+            portfolio_returns[ticker] = weighted_returns
+
+    # Combine into total portfolio returns
+    portfolio_returns["Portfolio"] = portfolio_returns.sum(axis=1)
+
+    # Fetch benchmark returns (S&P 500)
+    sp500 = get_historical_data("^GSPC", period="6mo")
+    if sp500 is None or sp500.empty:
+        risk_metrics_output.config(text="Unable to fetch S&P 500 data.")
+        return
+
+    benchmark_returns = sp500["Close"].pct_change().dropna()
+    aligned = pd.concat([portfolio_returns["Portfolio"], benchmark_returns], axis=1).dropna()
+    aligned.columns = ["Portfolio", "SP500"]
+
+    # Risk Metrics
+    volatility = np.std(aligned["Portfolio"]) * np.sqrt(252)
+    sharpe_ratio = (aligned["Portfolio"].mean() - 0.01/252) / aligned["Portfolio"].std() * np.sqrt(252)
+
+    covariance = np.cov(aligned["Portfolio"], aligned["SP500"])[0][1]
+    benchmark_variance = np.var(aligned["SP500"])
+    beta = covariance / benchmark_variance if benchmark_variance != 0 else np.nan
+
+    risk_text = (
+        f"📊 Volatility (Annualized): {volatility:.4f}\n"
+        f"📈 Sharpe Ratio: {sharpe_ratio:.4f}\n"
+        f"📉 Beta vs S&P 500: {beta:.4f}"
+    )
+
+    risk_metrics_output.config(text=risk_text)
+
 # Market Comparison Graph Frame
 comparison_graph_frame = ttk.Frame(root, padding=10)
 comparison_graph_frame.pack(pady=10, padx=10, fill="both", expand=True)
@@ -460,6 +562,17 @@ portfolio_value_frame.pack(pady=10, padx=10, fill="both", expand=True)
 portfolio_value_label = ttk.Label(portfolio_value_frame, text="Total Portfolio Value: $0.00", font=("Arial", 14, "bold"))
 portfolio_value_label.pack()
 
+# Risk Metrics Frame
+risk_metrics_frame = ttk.Frame(root, padding=10)
+risk_metrics_frame.pack(pady=10, padx=10, fill="both", expand=True)
+
+# Risk Metrics Display Label
+risk_metrics_label = ttk.Label(risk_metrics_frame, text="Risk Metrics:", font=("Arial", 14, "bold"))
+risk_metrics_label.pack()
+
+# Detailed Output Label
+risk_metrics_output = ttk.Label(risk_metrics_frame, text="", font=("Arial", 11), justify="left")
+risk_metrics_output.pack()
 
 # Styled buttons with light gray background
 ttk.Button(btn_frame, text="Add Stock", command=add_stock_gui, style="TButton").pack(pady=5)
@@ -475,6 +588,7 @@ update_portfolio_table()  # ✅ Load portfolio data when GUI starts
 update_graph()  # ✅ Load stock performance graph on startup
 update_portfolio_performance()  # ✅ Load total portfolio performance graph on startup
 update_market_comparison()  # ✅ Load comparison graph on startup
+update_risk_metrics()
 
 base_root.mainloop()
 
